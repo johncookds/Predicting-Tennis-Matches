@@ -1,5 +1,6 @@
 This is the folder for my Machine Learning Final Project.
 Spring Semester 2016.
+We had 2-3 weeks for the project.
 
 The goal of the project was:
 To predict the outcomes of tennis matches by using neural networks.
