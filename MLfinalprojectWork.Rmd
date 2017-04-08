@@ -1,0 +1,1030 @@
+---
+title: "Machine Learning Final Project work"
+output: html_document
+---
+
+
+These are the packages that are used in this project, if you have not installed them install them now.(One can check by running require(<the package>))
+
+```{r}
+#install.packages("data.table")
+#install.packages("plyr")
+#install.packages("RSNNS")
+#install.packages("devtools")
+#install.packages("ggplot2")
+```
+
+
+I set out to analyze tennis data, in the hope of building a model that would predict, given two players, who will win the match. To begin I had to find suitable data to answer this question. After experimenting with a few sources(mainly github accounts), I found "https://github.com/JeffSackmann" to have the best data. I decided it was the "best" for 2 reasons. It possesses aggregate match stats for every professional ATP(Association of Tennis Professionals) tennis match dating back to 1995. Second was the data was fairly clean, i.e. all names accurately spelled(crucial for pairing up by player_name).
+
+
+The first thing to do is to change the raw data from each match into percentages. This way we can compare percentages between matches and between players. This is much more difficult than at first glance as it requires in depth knowledge about tennis as well as information about how the stats were calculated which I do not have.
+
+To begin I read in the match data from 2015.
+
+```{r}
+#setwd("/Users/johncook/Desktop/Tennis Algorithm")
+matches2015 <- read.csv("2015 Data/atp_matches_2015.csv")
+```
+
+Before trying to train a model, we will explore the data.
+
+We will start by who is the best overall this year?
+
+```{r}
+require(data.table)
+require(plyr)
+library(neuralnet)
+winfreq15 <- plyr::count(matches2015, c("winner_name"))
+colnames(winfreq15)[colnames(winfreq15)=="winner_name"] <- "name"
+colnames(winfreq15)[colnames(winfreq15)=="freq"] <- "wins"
+head(winfreq15[with(winfreq15,order(-wins)),])
+```
+For 2015 we see that the big names in tennis are at the top, Djokovic, Murray, Federer, and Nadal are the 4 biggest names in tennis all within the top 5 of wins in 2015.
+
+
+Below are the players with the most losses in 2015.
+```{r}
+losefreq15 <- plyr::count(matches2015, c("loser_name"))
+colnames(losefreq15)[colnames(losefreq15)=="loser_name"] <- "name"
+colnames(losefreq15)[colnames(losefreq15)=="freq"] <- "losses"
+head(losefreq15[with(losefreq15,order(-losses)),])
+```
+
+Below are the players with the highest win percentage in 2015. Notice that this is more or less the same players as those with the most amount of wins.
+```{r}
+totalfreq15 <- merge(winfreq15, losefreq15, by="name")
+totalfreq15 <- data.table(totalfreq15)
+totalfreq15[,winpercentage:=(wins/(wins+losses))]
+head(totalfreq15[with(totalfreq15,order(-winpercentage)),])
+```
+
+Next lets expand our search to before 2015 and look at win percentage within the last 5,10,15, and 20 years.
+
+To begin we must aggregate each match year into a data frame called total_matches.
+```{r}
+total_matches <- matches2015
+years <- c("2014","2013","2012","2011","2010","2009","2008","2007","2006","2005","2004","2003","2002","2001","2000","1999","1998","1997","1996","1995")
+for (i in years){
+  assign(paste("matches",i, sep=""),read.csv(paste(paste(paste(i,"Data/atp_matches_"),i,sep=""),".csv",sep="")))
+  total_matches=rbind(total_matches,eval(as.name((paste("matches",i, sep=""))) ))
+  
+}
+```
+
+Next we will create a new "Year" column by selecting only the first 4 characters of the "tourney_id" column which represents the year in which the tournament was played in. 
+Because we will have a new "Year" column we can streamline the "tourneyid" column to contain the part after the year. This will allow us to compare results from the same tournament across different years. 
+We will keep the "tourney_id" column just in case but rename it to avoid any confusion.
+The column with:                      Will be named:
+Year                                  "Year"
+tournament id                       "tournament_id"
+Both                                  "id+Year"
+
+
+```{r}
+total_matches$tourney_id <- as.character(total_matches$tourney_id)
+total_matches <- cbind(total_matches,substr(total_matches$tourney_id,1,4))
+total_matches <- cbind(total_matches,substr(total_matches$tourney_id,6,13))
+total_matches$tourney_id <- as.factor(total_matches$tourney_id)
+colnames(total_matches)[colnames(total_matches)=="substr(total_matches$tourney_id, 1, 4)"] <- "Year"
+colnames(total_matches)[colnames(total_matches)=="substr(total_matches$tourney_id, 6, 13)"] <- "tournament_id"
+colnames(total_matches)[colnames(total_matches)=="tourney_id"] <- "id+Year"
+
+#If you try to turn a column of character Factors into an integer R will turn the Factor labels into an integer column not the characters. Thus one must turn the column into a character column first ot remove the factor labels
+total_matches$Year <- as.character(total_matches$Year)
+total_matches$Year <- as.integer(total_matches$Year)
+total_matches$tournament_id <- as.character(total_matches$tournament_id)
+total_matches$tournament_id <- as.integer(total_matches$tournament_id)
+total_matchesnoNA <- total_matches[complete.cases(total_matches),]
+```
+
+Best Win Percentage over the last 5 years
+```{r}
+total_matches5yr <- subset(total_matches,total_matches$Year > 2010)
+total_wins5yr <- plyr::count(total_matches5yr, c("winner_name"))
+colnames(total_wins5yr)[colnames(total_wins5yr)=="winner_name"] <- "name"
+colnames(total_wins5yr)[colnames(total_wins5yr)=="freq"] <- "wins"
+total_losses5yr <- plyr::count(total_matches5yr, c("loser_name"))
+colnames(total_losses5yr)[colnames(total_losses5yr)=="loser_name"] <- "name"
+colnames(total_losses5yr)[colnames(total_losses5yr)=="freq"] <- "losses"
+totalfreq5yr <- merge(total_wins5yr, total_losses5yr, by="name")
+totalfreq5yr <- data.table(totalfreq5yr)
+totalfreq5yr[,winpercentage:=(wins/(wins+losses))]
+totalfreqsub5yr <- totalfreq5yr[with(totalfreq5yr,order(-winpercentage)),]
+totalfreqsub5yr <- totalfreqsub5yr[(wins+losses)>30,]
+head(totalfreqsub5yr)
+```
+We see that Novak Djokavic has a win percentage of almost 90% over the last 5 years.
+
+
+However, notice in the table below(of winning % in the last 10 years) that Djokovic actually has a worse win percentage than Federer and Nadal. From this we know that Djokovic actually picked up his game in the last 5 years, by increasing his win percentage from 77% between the years of 2005 and 2010, to just under 90% from 2010 to the present.
+
+```{r}
+total_matches10yr <- subset(total_matches,total_matches$Year > 2005)
+total_wins10yr <- plyr::count(total_matches10yr, c("winner_name"))
+colnames(total_wins10yr)[colnames(total_wins10yr)=="winner_name"] <- "name"
+colnames(total_wins10yr)[colnames(total_wins10yr)=="freq"] <- "wins"
+total_losses10yr <- plyr::count(total_matches10yr, c("loser_name"))
+colnames(total_losses10yr)[colnames(total_losses10yr)=="loser_name"] <- "name"
+colnames(total_losses10yr)[colnames(total_losses10yr)=="freq"] <- "losses"
+totalfreq10yr <- merge(total_wins10yr, total_losses10yr, by="name")
+totalfreq10yr <- data.table(totalfreq10yr)
+totalfreq10yr[,winpercentage:=(wins/(wins+losses))]
+totalfreqsub10yr <- totalfreq10yr[with(totalfreq10yr,order(-winpercentage)),]
+totalfreqsub10yr <- totalfreqsub10yr[(wins+losses)>30,]
+head(totalfreqsub10yr)
+```
+
+These final two tables represent the top win percentages within the last 15 and 20 years respectively. Before drawing any conclusions from this data understand that the tables represent within the last x years. So even though Nadal is ranked very high on both the last 15 and the last 20 year tables he actually played no games between 20 years ago and 15 years ago(i.e. from 1995-2000).
+
+Top Win Percentages within the last 15 Years
+```{r}
+total_matches15yr <- subset(total_matches,total_matches$Year > 2000)
+total_wins15yr <- plyr::count(total_matches15yr, c("winner_name"))
+colnames(total_wins15yr)[colnames(total_wins15yr)=="winner_name"] <- "name"
+colnames(total_wins15yr)[colnames(total_wins15yr)=="freq"] <- "wins"
+total_losses15yr <- plyr::count(total_matches15yr, c("loser_name"))
+colnames(total_losses15yr)[colnames(total_losses15yr)=="loser_name"] <- "name"
+colnames(total_losses15yr)[colnames(total_losses15yr)=="freq"] <- "losses"
+totalfreq15yr <- merge(total_wins15yr, total_losses15yr, by="name")
+totalfreq15yr <- data.table(totalfreq15yr)
+totalfreq15yr[,winpercentage:=(wins/(wins+losses))]
+totalfreqsub15yr <- totalfreq15yr[with(totalfreq15yr,order(-winpercentage)),]
+totalfreqsub15yr <- totalfreqsub15yr[(wins+losses)>30,]
+head(totalfreqsub15yr)
+```
+
+Top Win Percentages within the last 20 Years
+```{r}
+total_matches20yr <- subset(total_matches,total_matches$Year > 1995)
+total_wins20yr <- plyr::count(total_matches20yr, c("winner_name"))
+colnames(total_wins20yr)[colnames(total_wins20yr)=="winner_name"] <- "name"
+colnames(total_wins20yr)[colnames(total_wins20yr)=="freq"] <- "wins"
+total_losses20yr <- plyr::count(total_matches20yr, c("loser_name"))
+colnames(total_losses20yr)[colnames(total_losses20yr)=="loser_name"] <- "name"
+colnames(total_losses20yr)[colnames(total_losses20yr)=="freq"] <- "losses"
+totalfreq20yr <- merge(total_wins20yr, total_losses20yr, by="name")
+totalfreq20yr <- data.table(totalfreq20yr)
+totalfreq20yr[,winpercentage:=(wins/(wins+losses))]
+totalfreqsub20yr <- totalfreq20yr[with(totalfreq20yr,order(-winpercentage)),]
+totalfreqsub20yr <- totalfreqsub20yr[(wins+losses)>30,]
+head(totalfreqsub20yr)
+```
+
+Next let's find out who's best on what surface.
+
+Over the past 5 years who has the highest win percentage on grass, clay, Hard, Carpet, and NA. The NA's are marked as blanks not NAs(i.e. "").
+
+First lets see how many matches have no surface recorded.
+```{r}
+nrow(subset(total_matches, total_matches$surface==""))
+nrow(subset(total_matches, total_matches$surface==""))/nrow(total_matches)
+```
+So about .2% of all the matches from 1995 to 2015 do not have a surface recorded, thus we can proceed and neglect these missing values.
+
+What proportion of matches within the last 5 years are played on grass, clay and Hard.(There is also Carpet but it is only used in a tiny amount of matches(none of which are of any prestige))
+
+Grass:
+```{r}
+nrow(subset(total_matches5yr, total_matches5yr$surface=="Grass"))/nrow(total_matches5yr)
+```
+
+Clay:
+```{r}
+nrow(subset(total_matches5yr, total_matches5yr$surface=="Clay"))/nrow(total_matches5yr)
+```
+
+
+Hard:
+```{r}
+nrow(subset(total_matches5yr, total_matches5yr$surface=="Hard"))/nrow(total_matches5yr)
+```
+
+Note: the proportions do not add up to 1 because of infrequent missing values.
+
+Who is the best on grass within the last 5 years? Djokovic
+```{r}
+total_matchesgrass <- subset(total_matches5yr, total_matches$surface=="Grass")
+total_winsgrass <- plyr::count(total_matchesgrass, c("winner_name"))
+colnames(total_winsgrass)[colnames(total_winsgrass)=="winner_name"] <- "name"
+colnames(total_winsgrass)[colnames(total_winsgrass)=="freq"] <- "wins"
+total_lossesgrass <- plyr::count(total_matchesgrass, c("loser_name"))
+colnames(total_lossesgrass)[colnames(total_lossesgrass)=="loser_name"] <- "name"
+colnames(total_lossesgrass)[colnames(total_lossesgrass)=="freq"] <- "losses"
+totalfreqgrass <- merge(total_winsgrass, total_lossesgrass, by="name")
+totalfreqgrass <- data.table(totalfreqgrass)
+totalfreqgrass[,winpercentage:=(wins/(wins+losses))]
+totalfreqsubgrass <- totalfreqgrass[with(totalfreqgrass,order(-winpercentage)),]
+totalfreqsubgrass <- totalfreqsubgrass[(wins+losses)>20,]
+head(totalfreqsubgrass)
+```
+
+Who is the best on Clay? Nadal
+```{r}
+total_matchesclay <- subset(total_matches5yr, total_matches$surface=="Clay")
+total_winsclay <- plyr::count(total_matchesclay, c("winner_name"))
+colnames(total_winsclay)[colnames(total_winsclay)=="winner_name"] <- "name"
+colnames(total_winsclay)[colnames(total_winsclay)=="freq"] <- "wins"
+total_lossesclay <- plyr::count(total_matchesclay, c("loser_name"))
+colnames(total_lossesclay)[colnames(total_lossesclay)=="loser_name"] <- "name"
+colnames(total_lossesclay)[colnames(total_lossesclay)=="freq"] <- "losses"
+totalfreqclay <- merge(total_winsclay, total_lossesclay, by="name")
+totalfreqclay <- data.table(totalfreqclay)
+totalfreqclay[,winpercentage:=(wins/(wins+losses))]
+totalfreqsubclay <- totalfreqclay[with(totalfreqclay,order(-winpercentage)),]
+totalfreqsubclay <- totalfreqsubclay[(wins+losses)>20,]
+head(totalfreqsubclay)
+
+```
+
+Who is the best on Hard Court? Djokovic
+```{r}
+total_matcheshard <- subset(total_matches5yr, total_matches$surface=="Hard")
+total_winshard <- plyr::count(total_matcheshard, c("winner_name"))
+colnames(total_winshard)[colnames(total_winshard)=="winner_name"] <- "name"
+colnames(total_winshard)[colnames(total_winshard)=="freq"] <- "wins"
+total_losseshard <- plyr::count(total_matcheshard, c("loser_name"))
+colnames(total_losseshard)[colnames(total_losseshard)=="loser_name"] <- "name"
+colnames(total_losseshard)[colnames(total_losseshard)=="freq"] <- "losses"
+totalfreqhard <- merge(total_winshard, total_losseshard, by="name")
+totalfreqhard <- data.table(totalfreqhard)
+totalfreqhard[,winpercentage:=(wins/(wins+losses))]
+totalfreqsubhard <- totalfreqhard[with(totalfreqhard,order(-winpercentage)),]
+totalfreqsubhard <- totalfreqsubhard[(wins+losses)>20,]
+head(totalfreqsubhard)
+```
+
+Notice that there are 4 guys always at the top of the list Djokovic, Federer, Murray, and Nadal. Lets see how there respective win percentages by court surface stack up.
+
+```{r}
+top4 <- c("Novak Djokovic", "Roger Federer", "Andy Murray", "Rafael Nadal")
+top4hard <- subset(totalfreqsubhard, totalfreqsubhard$name=="Novak Djokovic" | totalfreqsubhard$name=="Roger Federer"| totalfreqsubhard$name=="Andy Murray"| totalfreqsubhard$name=="Rafael Nadal")
+top4hard[,surface := "Hard"]
+top4clay <- subset(totalfreqsubclay, totalfreqsubclay$name=="Novak Djokovic" | totalfreqsubclay$name=="Roger Federer"| totalfreqsubclay$name=="Andy Murray"| totalfreqsubclay$name=="Rafael Nadal")
+top4clay[,surface := "Clay"]
+top4grass <- subset(totalfreqsubgrass, totalfreqsubgrass$name=="Novak Djokovic" | totalfreqsubgrass$name=="Roger Federer"| totalfreqsubgrass$name=="Andy Murray"| totalfreqsubgrass$name=="Rafael Nadal")
+top4grass[,surface := "Grass"]
+top45yr <- rbind(top4grass,top4clay,top4hard)
+top45yr$name <- as.factor(top45yr$name)
+top45yr$surface <- as.factor(top45yr$surface)
+require(plotly)
+top4plot <- plot_ly(top45yr, x=surface, y=winpercentage, group=name)
+layout(top4plot, title="How do the top 4 match up by playing surface")
+```
+
+We can clearly anoint Djokovic as the best all-around player between these four. It is interesting though how dominate Nadal is on clay, while this has been a contention of tennis fans for some time it is nice to have the numbers back it up.
+
+Was Nadal always so good on Clay?
+
+Let us plot Nadal's win percentage each year on surface. The first year we have a significant amount of data on Nadal is 2003.
+```{r}
+total_matchesNadal <- subset(total_matches,total_matches$Year >= 2003 & total_matches$winner_name=="Rafael Nadal" | total_matches$loser_name=="Rafael Nadal" )
+total_winsNadal <- plyr::count(total_matchesNadal, c("winner_name","Year","surface"))
+colnames(total_winsNadal)[colnames(total_winsNadal)=="winner_name"] <- "name"
+colnames(total_winsNadal)[colnames(total_winsNadal)=="freq"] <- "wins"
+total_lossesNadal <- plyr::count(total_matchesNadal, c("loser_name","Year","surface"))
+colnames(total_lossesNadal)[colnames(total_lossesNadal)=="loser_name"] <- "name"
+colnames(total_lossesNadal)[colnames(total_lossesNadal)=="freq"] <- "losses"
+totalfreqNadal <- merge(total_winsNadal, total_lossesNadal, by=c("name","Year","surface"))
+totalfreqNadal <- data.table(totalfreqNadal)
+totalfreqNadal <- subset(totalfreqNadal, totalfreqNadal$name=="Rafael Nadal")
+totalfreqNadal[,winpercentage:=(wins/(wins+losses))]
+totalfreqNadal <- subset(totalfreqNadal, totalfreqNadal$surface=="Grass" | totalfreqNadal$surface=="Clay" | totalfreqNadal$surface=="Hard")
+Nadalplot <- plot_ly(totalfreqNadal, x=Year, y=winpercentage, group=surface)
+layout(Nadalplot, title="Nadal's Career by Playing Surface")
+```
+
+It seems over his career he has always been the best on clay, that is especially true during the prime of his career from 2008-2013.
+
+Goal:
+To create a model which predicts who will win in a given match based on a players statistics.
+
+Create a very basic model using the players statistics through the year 2014 and train it on the matches played in 2015.
+
+
+
+Most Basic Neural Net: Win %
+------------------------------------------------------
+Can we predict 2015 match outcomes by player's historical win percentage.
+
+
+First we calculate the winning percentage for people from 2010 through 2014.
+
+```{r}
+total_matchesstat5 <- subset(total_matchesnoNA,total_matchesnoNA$Year > 2010 & total_matchesnoNA$Year <2015)
+total_winsstat5 <- plyr::count(total_matchesstat5, c("winner_name"))
+colnames(total_winsstat5)[colnames(total_winsstat5)=="winner_name"] <- "name"
+colnames(total_winsstat5)[colnames(total_winsstat5)=="freq"] <- "wins"
+total_lossesstat5 <- plyr::count(total_matchesstat5, c("loser_name"))
+colnames(total_lossesstat5)[colnames(total_lossesstat5)=="loser_name"] <- "name"
+colnames(total_lossesstat5)[colnames(total_lossesstat5)=="freq"] <- "losses"
+totalfreqstat5 <- merge(total_winsstat5, total_lossesstat5, all=TRUE,by="name")
+winpercentage <- data.table(totalfreqstat5)
+#Making NAs 0
+winpercentage$wins[is.na(totalfreqstat5$wins)] <- 0
+winpercentage$losses[is.na(totalfreqstat5$losses)] <- 0
+winpercentage[,gp:=(wins+losses)]
+winpercentage[,percent:=(wins/(wins+losses))]
+```
+
+Below is the first neural network model. It is set up as a hidden layer of 5 to allow it to run reasonably quickly.
+
+```{r}
+matches2015$winner_name <- as.character(matches2015$winner_name)
+matches2015$loser_name <- as.character(matches2015$loser_name)
+winpercentage$name <- as.character(winpercentage$name)
+x <- data.frame()
+y <- data.frame()
+for (i in 1:nrow(matches2015)){
+  if ((nrow(subset(winpercentage,winpercentage$name==eval(matches2015[i,]$winner_name)))==1) & (nrow(subset(winpercentage,winpercentage$name==eval(matches2015[i,]$loser_name)))==1)){
+  winner <- subset(winpercentage,winpercentage$name==eval(matches2015[i,]$winner_name))
+  loser <- subset(winpercentage,winpercentage$name==eval(matches2015[i,]$loser_name))
+  if (nrow(loser)==0 | nrow(winner)==0){
+    print("skip")
+  }
+  else{
+  colnames(winner)[colnames(winner)=="wins"] <- "w.wins"
+  colnames(winner)[colnames(winner)=="losses"] <- "w.losses"
+  colnames(winner)[colnames(winner)=="gp"] <- "w.gp"
+  colnames(winner)[colnames(winner)=="percent"] <- "w.percent"
+  colnames(winner)[colnames(winner)=="name"] <- "w.name"
+  colnames(loser)[colnames(loser)=="wins"] <- "l.wins"
+  colnames(loser)[colnames(loser)=="losses"] <- "l.losses"
+  colnames(loser)[colnames(loser)=="gp"] <- "l.gp"
+  colnames(loser)[colnames(loser)=="percent"] <- "l.percent"
+  colnames(loser)[colnames(loser)=="name"] <- "l.name"
+  if (i %% 2 ==0){
+  xrow <- cbind(winner,loser)
+  colnames(xrow) <- c("f.name","f.wins","f.losses","f.gp", "f.percent","s.name", "s.wins","s.losses" , "s.gp" , "s.percent")
+  x <- rbind(x,xrow)
+  yrow <- data.frame("w"=1)
+  y <- rbind(y,yrow)
+  }
+  else{
+  xrow <- cbind(loser,winner)
+  colnames(xrow) <- c("f.name","f.wins","f.losses","f.gp", "f.percent","s.name", "s.wins","s.losses" , "s.gp","s.percent")
+  x <- rbind(x,xrow)
+  yrow <- data.frame("w"=0)
+  y <- rbind(y,yrow)
+  }
+  }
+  }
+}
+set<-cbind(x,y[1])
+set <- set[complete.cases(set),]
+colnames(set) <- c("f.name","f.wins","f.losses","f.gp", "f.percent","s.name", "s.wins","s.losses" , "s.gp" , "s.percent", "w")
+smp_size <- floor(0.6 * nrow(set))
+train_ind <- sample(seq_len(nrow(set)), size = smp_size)
+train <- set[train_ind, ]
+test <- set[-train_ind, ]
+j="sse"
+nn <- neuralnet(w~f.wins+f.losses+f.gp+f.percent+s.wins+s.losses+s.gp+s.percent,data=train,hidden=c(5),linear.output=F,err.fct = j)
+pr.nn <- neuralnet::compute(nn,subset(test,select=c(2,3,4,5,7,8,9,10)))
+pred.results <- ifelse(pr.nn$net.result > 0.5,1,0)
+MSE.nn <- sum((test$w-pred.results)^2)/nrow(test)
+for (i in 1:length(pr.nn$net.result)){
+  if (pr.nn$net.result[i]>.99999){
+    pr.nn$net.result[i]=.999999
+  }
+  if (pr.nn$net.result[i]<.000001){
+    pr.nn$net.result[i]=.000001
+  }
+}
+tw<-as.matrix(test$w)
+ce <- (-1)*(t(tw) %*% log(pr.nn$net.result) + t(1-tw)%*%log(1-pr.nn$net.result))
+
+MSE.nn
+ce
+```
+
+
+
+
+Next step include court surface and player win % on each surface
+------------------------------------------------------
+Calculate win %'s by surface.
+
+```{r}
+sub12<-subset(total_matchesnoNA,total_matchesnoNA$Year > 2010 & total_matchesnoNA$Year <2015)
+sub12$surface<-as.character(sub12$surface)
+sub12$winner_name<-as.character(sub12$winner_name)
+sub12$loser_name<-as.character(sub12$loser_name)
+gamesbysurface <- data.frame(cbind(sub12$winner_name,sub12$loser_name,sub12$surface))
+colnames(gamesbysurface) <- c("winner","loser","surface")
+gamesClay <- gamesbysurface[gamesbysurface$surface=="Clay",]
+gamesGrass <- gamesbysurface[gamesbysurface$surface=="Grass",]
+gamesHard <- gamesbysurface[gamesbysurface$surface=="Hard",]
+
+#Clay
+gamesClay$winner <- as.character(gamesClay$winner)
+gamesClay$loser <- as.character(gamesClay$loser)
+gamesClay$surface <- as.character(gamesClay$surface)
+winClay <- plyr::count(gamesClay, c("winner"))
+colnames(winClay)[colnames(winClay)=="winner"] <- "name"
+colnames(winClay)[colnames(winClay)=="freq"] <- "wins"
+loseClay <- plyr::count(gamesClay, c("loser"))
+colnames(loseClay)[colnames(loseClay)=="loser"] <- "name"
+colnames(loseClay)[colnames(loseClay)=="freq"] <- "losses"
+statsClay <- merge(loseClay, winClay, all=TRUE,by="name")
+statsClay <- data.table(statsClay)
+#Making NAs 0
+statsClay$wins[is.na(statsClay$wins)] <- 0
+statsClay$losses[is.na(statsClay$losses)] <- 0
+statsClay[,clay.gp:=(wins+losses)]
+statsClay[,clay.percent:=(wins/(wins+losses))]
+library(dplyr)
+statsClay <- select(statsClay,c(1,4,5))
+#Grass
+gamesGrass$winner <- as.character(gamesGrass$winner)
+gamesGrass$loser <- as.character(gamesGrass$loser)
+gamesGrass$surface <- as.character(gamesGrass$surface)
+winGrass <- plyr::count(gamesGrass, c("winner"))
+colnames(winGrass)[colnames(winGrass)=="winner"] <- "name"
+colnames(winGrass)[colnames(winGrass)=="freq"] <- "wins"
+loseGrass <- plyr::count(gamesGrass, c("loser"))
+colnames(loseGrass)[colnames(loseGrass)=="loser"] <- "name"
+colnames(loseGrass)[colnames(loseGrass)=="freq"] <- "losses"
+statsGrass <- merge(loseGrass, winGrass, all=TRUE,by="name")
+statsGrass <- data.table(statsGrass)
+#Making NAs 0
+statsGrass$wins[is.na(statsGrass$wins)] <- 0
+statsGrass$losses[is.na(statsGrass$losses)] <- 0
+statsGrass[,grass.gp:=(wins+losses)]
+statsGrass[,grass.percent:=(wins/(wins+losses))]
+statsGrass <- select(statsGrass,c(1,4,5))
+#Hard
+gamesHard$winner <- as.character(gamesHard$winner)
+gamesHard$loser <- as.character(gamesHard$loser)
+gamesHard$surface <- as.character(gamesHard$surface)
+winHard <- plyr::count(gamesHard, c("winner"))
+colnames(winHard)[colnames(winHard)=="winner"] <- "name"
+colnames(winHard)[colnames(winHard)=="freq"] <- "wins"
+loseHard <- plyr::count(gamesHard, c("loser"))
+colnames(loseHard)[colnames(loseHard)=="loser"] <- "name"
+colnames(loseHard)[colnames(loseHard)=="freq"] <- "losses"
+statsHard <- merge(loseHard, winHard, all=TRUE,by="name")
+statsHard <- data.table(statsHard)
+#Making NAs 0
+statsHard$wins[is.na(statsHard$wins)] <- 0
+statsHard$losses[is.na(statsHard$losses)] <- 0
+statsHard[,hard.gp:=(wins+losses)]
+statsHard[,hard.percent:=(wins/(wins+losses))]
+statsHard <- select(statsHard,c(1,4,5))
+statssurface <- merge(statsClay,statsGrass,all=T,by="name")
+statssurface <- merge(statssurface,statsHard,all=T,by="name")
+```
+
+Below is the second neural network model. It is set up as a hidden layer of 10 to allow it to run reasonably quickly.
+
+```{r}
+matches2015$winner_name <- as.character(matches2015$winner_name)
+matches2015$loser_name <- as.character(matches2015$loser_name)
+winpercentage$name <- as.character(winpercentage$name)
+x <- data.frame()
+y <- data.frame()
+for (i in 1:nrow(matches2015)){
+  if ((nrow(subset(winpercentage,winpercentage$name==eval(matches2015[i,]$winner_name)))==1)){
+  winner <- subset(winpercentage,winpercentage$name==eval(matches2015[i,]$winner_name))
+  loser <- subset(winpercentage,winpercentage$name==eval(matches2015[i,]$loser_name))
+  if (matches2015[i,]$surface=="Hard"){
+    lsurf <- subset(statssurface,statssurface$name==eval(matches2015[i,]$loser_name))
+    wsurf <- subset(statssurface,statssurface$name==eval(matches2015[i,]$loser_name))
+    lsurf=select(lsurf,c(6,7))
+    wsurf=select(wsurf,c(6,7))
+    G<-0
+    C<-0
+    H<-1
+  }
+  if (matches2015[i,]$surface=="Clay"){
+    lsurf <- subset(statssurface,statssurface$name==eval(matches2015[i,]$loser_name))
+    wsurf <- subset(statssurface,statssurface$name==eval(matches2015[i,]$loser_name))
+    lsurf=select(lsurf,c(2,3))
+    wsurf=select(wsurf,c(2,3))
+    G<-0
+    C<-1
+    H<-0
+  }
+  if (matches2015[i,]$surface=="Grass"){
+    lsurf <- subset(statssurface,statssurface$name==eval(matches2015[i,]$loser_name))
+    wsurf <- subset(statssurface,statssurface$name==eval(matches2015[i,]$winner_name))
+    lsurf=select(lsurf,c(4,5))
+    wsurf=select(wsurf,c(4,5))
+    G<-1
+    C<-0
+    H<-0
+  }
+  if (nrow(loser)==0 | nrow(winner)==0){
+    print("skip")
+  }
+  else{
+  colnames(winner)[colnames(winner)=="wins"] <- "w.wins"
+  colnames(winner)[colnames(winner)=="losses"] <- "w.losses"
+  colnames(winner)[colnames(winner)=="gp"] <- "w.gp"
+  colnames(winner)[colnames(winner)=="percent"] <- "w.percent"
+  colnames(winner)[colnames(winner)=="name"] <- "w.name"
+  colnames(loser)[colnames(loser)=="wins"] <- "l.wins"
+  colnames(loser)[colnames(loser)=="losses"] <- "l.losses"
+  colnames(loser)[colnames(loser)=="gp"] <- "l.gp"
+  colnames(loser)[colnames(loser)=="percent"] <- "l.percent"
+  colnames(loser)[colnames(loser)=="name"] <- "l.name"
+  colnames(wsurf)<-c("w.gp","w.courtpct")
+  colnames(lsurf)<-c("l.gp","l.courtpct")
+  winner<-cbind(winner,wsurf)
+  loser<-cbind(loser,lsurf)
+  if (nrow(loser)==0 | nrow(winner)==0){
+    print("skip")
+  }
+  else{
+  if (i %% 2 ==0){
+  xrow <- cbind(winner,loser,G,C,H)
+  colnames(xrow) <- c("f.name","f.wins","f.losses","f.gp", "f.percent","f.courtgp","f.courtpct","s.name", "s.wins","s.losses","s.gp","s.percent","s.courtgp","s.courtpct","G","C","H")
+  x <- rbind(x,xrow)
+  yrow <- data.frame("w"=1)
+  y <- rbind(y,yrow)
+  }
+  else{
+  xrow <- cbind(loser,winner,G,C,H)
+  colnames(xrow) <- c("f.name","f.wins","f.losses","f.gp", "f.percent","f.courtgp","f.courtpct","s.name", "s.wins","s.losses","s.gp","s.percent","s.courtgp","s.courtpct","G","C","H")
+  x <- rbind(x,xrow)
+  yrow <- data.frame("w"=0)
+  y <- rbind(y,yrow)
+  }
+  }
+  }
+  }
+}
+set<-cbind(x,y[1])
+set <- set[complete.cases(set),]
+colnames(set) <- c("f.name","f.wins","f.losses","f.gp", "f.percent","f.courtgp","f.courtpct","s.name", "s.wins","s.losses","s.gp","s.percent","s.courtgp","s.courtpct","G","C","H","w")
+smp_size <- floor(0.6 * nrow(set))
+train_ind <- sample(seq_len(nrow(set)), size = smp_size)
+train <- set[train_ind,]
+test <- set[-train_ind,]
+for (j in c('sse','ce')){
+nn <- neuralnet(w~f.wins+f.losses+f.gp+f.percent+f.courtgp+f.courtpct+s.wins+s.losses+s.gp+s.percent+s.percent+s.courtgp+s.courtpct+G+C+H,data=train,hidden=c(10),linear.output=F,err.fct = j)
+pr.nn <- neuralnet::compute(nn,subset(test,select=c(2,3,4,5,6,7,9,10,11,12,13,14,15,16,17)))
+pred.results <- ifelse(pr.nn$net.result > 0.5,1,0)
+MSE.nn <- sum((test$w-pred.results)^2)/nrow(test)
+MSE.nn
+for (i in 1:length(pr.nn$net.result)){
+  if (pr.nn$net.result[i]>.99999){
+    pr.nn$net.result[i]=.999999
+  }
+  if (pr.nn$net.result[i]<.000001){
+    pr.nn$net.result[i]=.000001
+  }
+}
+tw<-as.matrix(test$w)
+ce <- (-1)*(t(tw) %*% log(pr.nn$net.result) + t(1-tw)%*%log(1-pr.nn$net.result))
+print(MSE.nn)
+print(ce)
+}
+
+```
+
+MSE is .15-.23
+
+
+
+Calculating precise stat percentages
+------------------------------------------------------
+
+Now time to create my stats. Look at Word Document "Creating Stats.docx" for more information about how I calculated the stats and what assumptions I made.
+
+
+```{r}
+library(plyr)
+#Take out any row that contains an NA, thus no worry about adding NA's. (Note NA+2=NA)
+
+total_matchesnoNA <- total_matches[complete.cases(total_matches),]
+total_matchesstat <- subset(total_matchesnoNA,total_matchesnoNA$Year > 2010 & total_matchesnoNA$Year <2015)
+total_matchesstat <- data.table(total_matchesstat)
+statw <- total_matchesstat[,list(p.bpSaved=sum(w_bpSaved),p.bpFaced=sum(w_bpFaced),p.1stWon=sum(w_1stWon),p.svpt=sum(w_svpt),p.2ndWon=sum(w_2ndWon),p.1stIn=sum(w_1stIn), o.1stIn=sum(l_1stIn),o.1stWon=sum(l_1stWon),o.svpt=sum(l_svpt),o.2ndWon=sum(l_2ndWon),o.df=sum(l_df)),by="winner_name"]
+statw[with(statw,order(-p.bpSaved)),]
+statl <- total_matchesstat[,list(p.bpSaved=sum(l_bpSaved),p.bpFaced=sum(l_bpFaced),p.1stWon=sum(l_1stWon),p.svpt=sum(l_svpt),p.2ndWon=sum(l_2ndWon),p.1stIn=sum(l_1stIn), o.1stIn=sum(w_1stIn),o.1stWon=sum(w_1stWon),o.svpt=sum(w_svpt),o.2ndWon=sum(w_2ndWon),o.df=sum(w_df)),by="loser_name"]
+statl[with(statl,order(-p.bpSaved)),]
+colnames(statw)[colnames(statw)=="winner_name"] <- "name"
+colnames(statl)[colnames(statl)=="loser_name"] <- "name"
+#the all=TRUE gives us a full join, so that a player that only lost and never won will still be in the table
+allstats <- ddply(merge(statw, statl, all=TRUE, by="name"), .(name),summarise, p.bpSaved=sum(p.bpSaved.x+p.bpSaved.y),p.bpSaved=sum(p.bpSaved.x+p.bpSaved.y),p.bpFaced=sum(p.bpFaced.x+p.bpFaced.y), p.1stWon=sum(p.1stWon.x+p.1stWon.y),p.svpt=sum(p.svpt.x+p.svpt.y),p.2ndWon=sum(p.2ndWon.x+p.2ndWon.y),p.1stIn=sum(p.1stIn.x+p.1stIn.y),o.1stIn=sum(o.1stIn.x+o.1stIn.y),o.1stWon=sum(o.1stWon.x+o.1stWon.y),o.svpt=sum(o.svpt.x+o.svpt.y),o.2ndWon=sum(o.2ndWon.x+o.2ndWon.y),o.df=sum(o.df.x+o.df.y))
+allstats <- data.table(allstats)
+```
+
+
+Statistic #1: Winning Percentage on 1st Serve
+
+```{r}
+allstats[,stat1:=(p.1stWon/(p.svpt))]
+```
+
+Statistic #2: Winning Percentage on 2nd Serve
+
+```{r}
+allstats[,stat2:=(p.2ndWon/(p.svpt-p.1stIn))]
+```
+
+Statistic #3: Winning Percentage on Return Serve
+
+```{r}
+allstats[,stat3:=(((o.1stIn-o.1stWon) + ((o.svpt-o.1stIn)-o.2ndWon-o.df))/(o.svpt))]
+```
+
+Statistic #4: Winning Percentage on Break Point
+
+```{r}
+allstats[,stat4:=(p.bpSaved/(p.bpFaced))]
+```
+
+
+Now to clean up the table and drop what we don't need
+```{r}
+MLPstats <- subset(allstats,select=c("name","stat1","stat2","stat3","stat4"))
+nrow(MLPstats)
+MLPstats <- MLPstats[complete.cases(MLPstats),]
+```
+
+Below is the third(and final) neural network model. It is set up as a hidden layer of 10 to allow it to run reasonably quickly.
+
+```{r}
+matches2015$winner_name <- as.character(matches2015$winner_name)
+matches2015$loser_name <- as.character(matches2015$loser_name)
+MLPstats$name <- as.character(MLPstats$name)
+x <- data.frame()
+y <- data.frame()
+for (i in 1:nrow(matches2015)){
+  if ((nrow(subset(winpercentage,winpercentage$name==eval(matches2015[i,]$winner_name)))==1) & (nrow(subset(winpercentage,winpercentage$name==eval(matches2015[i,]$loser_name)))==1)){
+  if ((nrow(subset(MLPstats,MLPstats$name==eval(matches2015[i,]$winner_name)))==1) & (nrow(subset(MLPstats,MLPstats$name==eval(matches2015[i,]$loser_name)))==1)){
+  win1 <- subset(winpercentage,winpercentage$name==eval(matches2015[i,]$winner_name))
+  los1 <- subset(winpercentage,winpercentage$name==eval(matches2015[i,]$loser_name))
+  winner <- subset(MLPstats,MLPstats$name==eval(matches2015[i,]$winner_name))
+  loser <- subset(MLPstats,MLPstats$name==eval(matches2015[i,]$loser_name))
+  if (nrow(loser)==0 | nrow(winner)==0){
+    print("skip")
+  }
+  else{
+  winner <- cbind(winner,win1)
+  loser <- cbind(loser,los1)
+  if (matches2015[i,]$surface=="Hard"){
+    lsurf <- subset(statssurface,statssurface$name==eval(matches2015[i,]$loser_name))
+    wsurf <- subset(statssurface,statssurface$name==eval(matches2015[i,]$loser_name))
+    lsurf=select(lsurf,c(6,7))
+    wsurf=select(wsurf,c(6,7))
+    G<-0
+    C<-0
+    H<-1
+  }
+  if (matches2015[i,]$surface=="Clay"){
+    lsurf <- subset(statssurface,statssurface$name==eval(matches2015[i,]$loser_name))
+    wsurf <- subset(statssurface,statssurface$name==eval(matches2015[i,]$loser_name))
+    lsurf=select(lsurf,c(2,3))
+    wsurf=select(wsurf,c(2,3))
+    G<-0
+    C<-1
+    H<-0
+  }
+  if (matches2015[i,]$surface=="Grass"){
+    lsurf <- subset(statssurface,statssurface$name==eval(matches2015[i,]$loser_name))
+    wsurf <- subset(statssurface,statssurface$name==eval(matches2015[i,]$winner_name))
+    lsurf=select(lsurf,c(4,5))
+    wsurf=select(wsurf,c(4,5))
+    G<-1
+    C<-0
+    H<-0
+  }
+  if (nrow(loser)==0 | nrow(winner)==0){
+    print("skip")
+  }
+  else{
+  colnames(winner)[colnames(winner)=="stat1"] <- "w.stat1"
+  colnames(winner)[colnames(winner)=="stat2"] <- "w.stat2"
+  colnames(winner)[colnames(winner)=="stat3"] <- "w.stat3"
+  colnames(winner)[colnames(winner)=="stat4"] <- "w.stat4"
+  colnames(winner)[colnames(winner)=="name"] <- "w.name"
+  colnames(winner)[colnames(winner)=="wins"] <- "w.wins"
+  colnames(winner)[colnames(winner)=="losses"] <- "w.losses"
+  colnames(winner)[colnames(winner)=="gp"] <- "w.gp"
+  colnames(winner)[colnames(winner)=="percent"] <- "w.percent"
+  colnames(loser)[colnames(loser)=="wins"] <- "l.wins"
+  colnames(loser)[colnames(loser)=="losses"] <- "l.losses"
+  colnames(loser)[colnames(loser)=="gp"] <- "l.gp"
+  colnames(loser)[colnames(loser)=="percent"] <- "l.percent"
+  colnames(loser)[colnames(loser)=="stat1"] <- "l.stat1"
+  colnames(loser)[colnames(loser)=="stat2"] <- "l.stat2"
+  colnames(loser)[colnames(loser)=="stat3"] <- "l.stat3"
+  colnames(loser)[colnames(loser)=="stat4"] <- "l.stat4"
+  colnames(loser)[colnames(loser)=="name"] <- "l.name"
+  colnames(wsurf)<-c("w.gp","w.courtpct")
+  colnames(lsurf)<-c("l.gp","l.courtpct")
+  winner<-cbind(winner,wsurf)
+  winner$w.name<-NULL
+  loser<-cbind(loser,lsurf)
+  loser$l.name<-NULL
+  if (i %% 2 ==0){
+  xrow <- cbind(winner,loser,G,C,H)
+  colnames(xrow) <- c("f.stat1","f.stat2", "f.stat3","f.stat4","f.name","f.wins","f.losses","f.gp", "f.percent","f.courtgp","f.courtpct", "s.stat1","s.stat2","s.stat3","s.stat4","s.name","s.wins","s.losses","s.gp","s.percent","s.courtgp","s.courtpct","G","C","H")
+  x <- rbind(x,xrow)
+  yrow <- data.frame("w"=1)
+  y <- rbind(y,yrow)
+  }
+  else{
+  xrow <- cbind(loser,winner,G,C,H)
+  colnames(xrow) <- c("f.stat1","f.stat2", "f.stat3","f.stat4","f.name","f.wins","f.losses","f.gp", "f.percent","f.courtgp","f.courtpct", "s.stat1","s.stat2","s.stat3","s.stat4","s.name","s.wins","s.losses","s.gp","s.percent","s.courtgp","s.courtpct","G","C","H")
+  x <- rbind(x,xrow)
+  yrow <- data.frame("w"=0)
+  y <- rbind(y,yrow)
+  }
+  }
+  }
+  }
+  }
+}
+set<-cbind(x,y[1])
+set <- set[complete.cases(set),]
+colnames(set) <- c("f.stat1","f.stat2", "f.stat3","f.stat4","f.name","f.wins","f.losses","f.gp", "f.percent","f.courtgp","f.courtpct", "s.stat1","s.stat2","s.stat3","s.stat4","s.name","s.wins","s.losses","s.gp","s.percent","s.courtgp","s.courtpct","G","C","H","w")
+smp_size <- floor(0.6 * nrow(set))
+train_ind <- sample(seq_len(nrow(set)), size = smp_size)
+train <- set[train_ind,]
+test <- set[-train_ind,]
+for (j in c('sse','ce')){
+nn <- neuralnet(w~f.stat1+f.stat2+f.stat3+f.stat4+f.wins+f.losses+f.gp+f.percent+f.courtgp+f.courtpct+s.stat1+s.stat2+s.stat3+s.stat4+s.wins+s.losses+s.gp+s.percent+s.courtgp+s.courtpct+G+C+H,data=train,hidden=c(10),linear.output=F,err.fct=j)
+#plot(nn)
+pr.nn <- neuralnet::compute(nn,subset(test,select=c(1,2,3,4,6,7,8,9,10,11,12,13,14,15,17,18,19,20,21,22,23,24,25)))
+pred.results <- ifelse(pr.nn$net.result > 0.5,1,0)
+MSE.nn <- sum((test$w-pred.results)^2)/nrow(test)
+for (i in 1:length(pr.nn$net.result)){
+  if (pr.nn$net.result[i]>.99999){
+    pr.nn$net.result[i]=.999999
+  }
+  if (pr.nn$net.result[i]<.000001){
+    pr.nn$net.result[i]=.000001
+  }
+}
+tw<-as.matrix(test$w)
+ce <- (-1)*(t(tw) %*% log(pr.nn$net.result) + t(1-tw)%*%log(1-pr.nn$net.result))
+print(MSE.nn)
+print(ce)
+}
+#write.csv(MSECI, "mseci.csv")
+
+```
+
+Below is the neural network model calculation used to see if the model could win money betting on the 2015 US Open.
+
+```{r}
+matches2015=matches2015[matches2015$tourney_date<20150831,]
+matches2015$winner_name <- as.character(matches2015$winner_name)
+matches2015$loser_name <- as.character(matches2015$loser_name)
+MLPstats$name <- as.character(MLPstats$name)
+x <- data.frame()
+y <- data.frame()
+for (i in 1:nrow(matches2015)){
+  if ((nrow(subset(winpercentage,winpercentage$name==eval(matches2015[i,]$winner_name)))==1) & (nrow(subset(winpercentage,winpercentage$name==eval(matches2015[i,]$loser_name)))==1)){
+  if ((nrow(subset(MLPstats,MLPstats$name==eval(matches2015[i,]$winner_name)))==1) & (nrow(subset(MLPstats,MLPstats$name==eval(matches2015[i,]$loser_name)))==1)){
+  win1 <- subset(winpercentage,winpercentage$name==eval(matches2015[i,]$winner_name))
+  los1 <- subset(winpercentage,winpercentage$name==eval(matches2015[i,]$loser_name))
+  winner <- subset(MLPstats,MLPstats$name==eval(matches2015[i,]$winner_name))
+  loser <- subset(MLPstats,MLPstats$name==eval(matches2015[i,]$loser_name))
+  if (nrow(loser)==0 | nrow(winner)==0){
+    print("skip")
+  }
+  else{
+  winner <- cbind(winner,win1)
+  loser <- cbind(loser,los1)
+  if (matches2015[i,]$surface=="Hard"){
+    lsurf <- subset(statssurface,statssurface$name==eval(matches2015[i,]$loser_name))
+    wsurf <- subset(statssurface,statssurface$name==eval(matches2015[i,]$loser_name))
+    lsurf=select(lsurf,c(6,7))
+    wsurf=select(wsurf,c(6,7))
+    G<-0
+    C<-0
+    H<-1
+  }
+  if (matches2015[i,]$surface=="Clay"){
+    lsurf <- subset(statssurface,statssurface$name==eval(matches2015[i,]$loser_name))
+    wsurf <- subset(statssurface,statssurface$name==eval(matches2015[i,]$loser_name))
+    lsurf=select(lsurf,c(2,3))
+    wsurf=select(wsurf,c(2,3))
+    G<-0
+    C<-1
+    H<-0
+  }
+  if (matches2015[i,]$surface=="Grass"){
+    lsurf <- subset(statssurface,statssurface$name==eval(matches2015[i,]$loser_name))
+    wsurf <- subset(statssurface,statssurface$name==eval(matches2015[i,]$winner_name))
+    lsurf=select(lsurf,c(4,5))
+    wsurf=select(wsurf,c(4,5))
+    G<-1
+    C<-0
+    H<-0
+  }
+  if (nrow(loser)==0 | nrow(winner)==0){
+    print("skip")
+  }
+  else{
+  colnames(winner)[colnames(winner)=="stat1"] <- "w.stat1"
+  colnames(winner)[colnames(winner)=="stat2"] <- "w.stat2"
+  colnames(winner)[colnames(winner)=="stat3"] <- "w.stat3"
+  colnames(winner)[colnames(winner)=="stat4"] <- "w.stat4"
+  colnames(winner)[colnames(winner)=="name"] <- "w.name"
+  colnames(winner)[colnames(winner)=="wins"] <- "w.wins"
+  colnames(winner)[colnames(winner)=="losses"] <- "w.losses"
+  colnames(winner)[colnames(winner)=="gp"] <- "w.gp"
+  colnames(winner)[colnames(winner)=="percent"] <- "w.percent"
+  colnames(loser)[colnames(loser)=="wins"] <- "l.wins"
+  colnames(loser)[colnames(loser)=="losses"] <- "l.losses"
+  colnames(loser)[colnames(loser)=="gp"] <- "l.gp"
+  colnames(loser)[colnames(loser)=="percent"] <- "l.percent"
+  colnames(loser)[colnames(loser)=="stat1"] <- "l.stat1"
+  colnames(loser)[colnames(loser)=="stat2"] <- "l.stat2"
+  colnames(loser)[colnames(loser)=="stat3"] <- "l.stat3"
+  colnames(loser)[colnames(loser)=="stat4"] <- "l.stat4"
+  colnames(loser)[colnames(loser)=="name"] <- "l.name"
+  colnames(wsurf)<-c("w.gp","w.courtpct")
+  colnames(lsurf)<-c("l.gp","l.courtpct")
+  winner<-cbind(winner,wsurf)
+  winner$w.name<-NULL
+  loser<-cbind(loser,lsurf)
+  loser$l.name<-NULL
+  if (i %% 2 ==0){
+  xrow <- cbind(winner,loser,G,C,H)
+  colnames(xrow) <- c("f.stat1","f.stat2", "f.stat3","f.stat4","f.name","f.wins","f.losses","f.gp", "f.percent","f.courtgp","f.courtpct", "s.stat1","s.stat2","s.stat3","s.stat4","s.name","s.wins","s.losses","s.gp","s.percent","s.courtgp","s.courtpct","G","C","H")
+  x <- rbind(x,xrow)
+  yrow <- data.frame("w"=1)
+  y <- rbind(y,yrow)
+  }
+  else{
+  xrow <- cbind(loser,winner,G,C,H)
+  colnames(xrow) <- c("f.stat1","f.stat2", "f.stat3","f.stat4","f.name","f.wins","f.losses","f.gp", "f.percent","f.courtgp","f.courtpct", "s.stat1","s.stat2","s.stat3","s.stat4","s.name","s.wins","s.losses","s.gp","s.percent","s.courtgp","s.courtpct","G","C","H")
+  x <- rbind(x,xrow)
+  yrow <- data.frame("w"=0)
+  y <- rbind(y,yrow)
+  }
+  }
+  }
+  }
+  }
+}
+set<-cbind(x,y[1])
+set <- set[complete.cases(set),]
+colnames(set) <- c("f.stat1","f.stat2", "f.stat3","f.stat4","f.name","f.wins","f.losses","f.gp", "f.percent","f.courtgp","f.courtpct", "s.stat1","s.stat2","s.stat3","s.stat4","s.name","s.wins","s.losses","s.gp","s.percent","s.courtgp","s.courtpct","G","C","H","w")
+smp_size <- floor(0.6 * nrow(set))
+train_ind <- sample(seq_len(nrow(set)), size = smp_size)
+train <- set[train_ind,]
+test <- set[-train_ind,]
+for (j in c('sse')){
+nn <- neuralnet(w~f.stat1+f.stat2+f.stat3+f.stat4+f.wins+f.losses+f.gp+f.percent+f.courtgp+f.courtpct+s.stat1+s.stat2+s.stat3+s.stat4+s.wins+s.losses+s.gp+s.percent+s.courtgp+s.courtpct+G+C+H,data=train,hidden=c(30,10),linear.output=F,err.fct=j)
+#plot(nn)
+pr.nn <- neuralnet::compute(nn,subset(test,select=c(1,2,3,4,6,7,8,9,10,11,12,13,14,15,17,18,19,20,21,22,23,24,25)))
+pred.results <- ifelse(pr.nn$net.result > 0.5,1,0)
+MSE.nn <- sum((test$w-pred.results)^2)/nrow(test)
+for (i in 1:length(pr.nn$net.result)){
+  if (pr.nn$net.result[i]>.99999){
+    pr.nn$net.result[i]=.999999
+  }
+  if (pr.nn$net.result[i]<.000001){
+    pr.nn$net.result[i]=.000001
+  }
+}
+tw<-as.matrix(test$w)
+ce <- (-1)*(t(tw) %*% log(pr.nn$net.result) + t(1-tw)%*%log(1-pr.nn$net.result))
+
+print(MSE.nn)
+print(ce)
+}
+
+```
+
+Below is the testing of the above neural net model
+
+```{r}
+matches2015 <- read.csv("2015 Data/atp_matches_2015.csv")
+matches2015<-matches2015[matches2015$tourney_name=='US Open',]
+matches2015$winner_name <- as.character(matches2015$winner_name)
+matches2015$loser_name <- as.character(matches2015$loser_name)
+MLPstats$name <- as.character(MLPstats$name)
+x <- data.frame()
+y <- data.frame()
+for (i in 1:nrow(matches2015)){
+  if ((nrow(subset(winpercentage,winpercentage$name==eval(matches2015[i,]$winner_name)))==1) & (nrow(subset(winpercentage,winpercentage$name==eval(matches2015[i,]$loser_name)))==1)){
+  if ((nrow(subset(MLPstats,MLPstats$name==eval(matches2015[i,]$winner_name)))==1) & (nrow(subset(MLPstats,MLPstats$name==eval(matches2015[i,]$loser_name)))==1)){
+  win1 <- subset(winpercentage,winpercentage$name==eval(matches2015[i,]$winner_name))
+  los1 <- subset(winpercentage,winpercentage$name==eval(matches2015[i,]$loser_name))
+  winner <- subset(MLPstats,MLPstats$name==eval(matches2015[i,]$winner_name))
+  loser <- subset(MLPstats,MLPstats$name==eval(matches2015[i,]$loser_name))
+  if (nrow(loser)==0 | nrow(winner)==0){
+    print("skip")
+  }
+  else{
+  winner <- cbind(winner,win1)
+  loser <- cbind(loser,los1)
+  if (matches2015[i,]$surface=="Hard"){
+    lsurf <- subset(statssurface,statssurface$name==eval(matches2015[i,]$loser_name))
+    wsurf <- subset(statssurface,statssurface$name==eval(matches2015[i,]$loser_name))
+    lsurf=select(lsurf,c(6,7))
+    wsurf=select(wsurf,c(6,7))
+    G<-0
+    C<-0
+    H<-1
+  }
+  if (matches2015[i,]$surface=="Clay"){
+    lsurf <- subset(statssurface,statssurface$name==eval(matches2015[i,]$loser_name))
+    wsurf <- subset(statssurface,statssurface$name==eval(matches2015[i,]$loser_name))
+    lsurf=select(lsurf,c(2,3))
+    wsurf=select(wsurf,c(2,3))
+    G<-0
+    C<-1
+    H<-0
+  }
+  if (matches2015[i,]$surface=="Grass"){
+    lsurf <- subset(statssurface,statssurface$name==eval(matches2015[i,]$loser_name))
+    wsurf <- subset(statssurface,statssurface$name==eval(matches2015[i,]$winner_name))
+    lsurf=select(lsurf,c(4,5))
+    wsurf=select(wsurf,c(4,5))
+    G<-1
+    C<-0
+    H<-0
+  }
+  if (nrow(loser)==0 | nrow(winner)==0){
+    print("skip")
+  }
+  else{
+  colnames(winner)[colnames(winner)=="stat1"] <- "w.stat1"
+  colnames(winner)[colnames(winner)=="stat2"] <- "w.stat2"
+  colnames(winner)[colnames(winner)=="stat3"] <- "w.stat3"
+  colnames(winner)[colnames(winner)=="stat4"] <- "w.stat4"
+  colnames(winner)[colnames(winner)=="name"] <- "w.name"
+  colnames(winner)[colnames(winner)=="wins"] <- "w.wins"
+  colnames(winner)[colnames(winner)=="losses"] <- "w.losses"
+  colnames(winner)[colnames(winner)=="gp"] <- "w.gp"
+  colnames(winner)[colnames(winner)=="percent"] <- "w.percent"
+  colnames(loser)[colnames(loser)=="wins"] <- "l.wins"
+  colnames(loser)[colnames(loser)=="losses"] <- "l.losses"
+  colnames(loser)[colnames(loser)=="gp"] <- "l.gp"
+  colnames(loser)[colnames(loser)=="percent"] <- "l.percent"
+  colnames(loser)[colnames(loser)=="stat1"] <- "l.stat1"
+  colnames(loser)[colnames(loser)=="stat2"] <- "l.stat2"
+  colnames(loser)[colnames(loser)=="stat3"] <- "l.stat3"
+  colnames(loser)[colnames(loser)=="stat4"] <- "l.stat4"
+  colnames(loser)[colnames(loser)=="name"] <- "l.name"
+  colnames(wsurf)<-c("w.gp","w.courtpct")
+  colnames(lsurf)<-c("l.gp","l.courtpct")
+  winner<-cbind(winner,wsurf)
+  winner$w.name<-NULL
+  loser<-cbind(loser,lsurf)
+  loser$l.name<-NULL
+  if (i %% 2 ==0){
+  xrow <- cbind(winner,loser,G,C,H)
+  colnames(xrow) <- c("f.stat1","f.stat2", "f.stat3","f.stat4","f.name","f.wins","f.losses","f.gp", "f.percent","f.courtgp","f.courtpct", "s.stat1","s.stat2","s.stat3","s.stat4","s.name","s.wins","s.losses","s.gp","s.percent","s.courtgp","s.courtpct","G","C","H")
+  x <- rbind(x,xrow)
+  yrow <- data.frame("w"=1)
+  y <- rbind(y,yrow)
+  }
+  else{
+  xrow <- cbind(loser,winner,G,C,H)
+  colnames(xrow) <- c("f.stat1","f.stat2", "f.stat3","f.stat4","f.name","f.wins","f.losses","f.gp", "f.percent","f.courtgp","f.courtpct", "s.stat1","s.stat2","s.stat3","s.stat4","s.name","s.wins","s.losses","s.gp","s.percent","s.courtgp","s.courtpct","G","C","H")
+  x <- rbind(x,xrow)
+  yrow <- data.frame("w"=0)
+  y <- rbind(y,yrow)
+  }
+  }
+  }
+  }
+  }
+}
+set<-cbind(x,y[1])
+set <- set[complete.cases(set),]
+colnames(set) <- c("f.stat1","f.stat2", "f.stat3","f.stat4","f.name","f.wins","f.losses","f.gp", "f.percent","f.courtgp","f.courtpct", "s.stat1","s.stat2","s.stat3","s.stat4","s.name","s.wins","s.losses","s.gp","s.percent","s.courtgp","s.courtpct","G","C","H","w")
+pr.nn <- neuralnet::compute(nn,subset(set,select=c(1,2,3,4,6,7,8,9,10,11,12,13,14,15,17,18,19,20,21,22,23,24,25)))
+pred.results <- ifelse(pr.nn$net.result > 0.5,1,0)
+MSE.nn <- sum((set$w-pred.results)^2)/nrow(set)
+MSE.nn
+#this is used in the python notebook that is attached
+#write.csv(cbind(subset(set,select=c(6,18)),pred.results),'USOpenpredres.csv')
+```
+
+
+
+
+Network graphing 2015 matches
+------------------------------------------------------
+
+```{r,eval=FALSE}
+library(igraph)
+bsk<-read.table("http://www.dimiter.eu/Data_files/edgesdata3.txt", sep='\t', dec=',', header=T)
+matchplyrs=subset(matches2015,select=c("winner_name", "loser_name"))
+match.network<-graph.data.frame(matchplyrs, directed=F)
+V(match.network)
+E(match.network)
+degs=degree(match.network)
+top=head(sort(degs,decreasing = T))
+quartz()
+plot(match.network)
+bad.vs <- V(match.network)[degree(match.network)<3]
+trim3.network <- delete.vertices(match.network, bad.vs)
+V(trim3.network)$color <- ifelse(V(trim3.network)$name %in% top, 'red','blue')
+V(trim3.network)$size <- degree(trim3.network)/10
+par(mai=c(0,0,1,0))
+quartz()
+plot(trim3.network,layout=layout.fruchterman.reingold,vertex.label.font=2,vertex.label.cex=.1)
+write.graph(match.network, "3matchnet.gml",format="gml")
+```
